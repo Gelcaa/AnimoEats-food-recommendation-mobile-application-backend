@@ -1,53 +1,137 @@
-const prisma = require("../models/prisma/prismaClient");
+const prisma = require("../prisma/prismaClient");
 const Joi = require("joi");
 const nutritionCalculations = require("../services/nutritionCalculations");
-// const firebase = require("../firebaseConfig");
 const dotenv = require("dotenv");
 dotenv.config();
-
-// Function to generate 4-digit token
-function generate4DigitToken() {
-  return Math.floor(1000 + Math.random() * 9000); // Generates a 4-digit number
-}
-
-// Validate email with @dlsud.edu.ph domain
-function validateEmail(email) {
-  const regex = /^[a-zA-Z0-9._%+-]+@dlsud\.edu\.ph$/;
-  return regex.test(email);
-}
-
-// Configure Nodemailer transporter for sending emails
-// const transporter = nodemailer.createTransport({
-//   service: "gmail", // or another email service
-//   auth: {
-//     user: process.env.EMAIL_USER,
-//     pass: process.env.EMAIL_PASS,
-//   },
-// });
-
-// Function to generate 4-digit token
-// function generate4DigitToken() {
-//   return Math.floor(1000 + Math.random() * 9000); // Generates a 4-digit number
-// }
-
-// Validate email with @dlsud.edu.ph domain
-function validateEmail(email) {
-  const regex = /^[a-zA-Z0-9._%+-]+@dlsud\.edu\.ph$/;
-  return regex.test(email);
-}
+const admin = require("firebase-admin");
+const serviceAccount = require("../serviceAccountKey.json");
+const nodemailer = require("nodemailer");
+const crypto = require("crypto");
+const sgMail = require("@sendgrid/mail");
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 class UserGateway {
-  // Create a new user
+  static generateOTP() {
+    return crypto.randomInt(1000, 10000); // Generate a random 4-digit OTP
+  }
+
+  // Configure Nodemailer transporter with Gmail (or other SMTP provider)
+  // static transporter = nodemailer.createTransport({
+  //   service: "gmail", // Replace with your SMTP provider if needed
+  //   auth: {
+  //     user: process.env.GMAIL_USER, // Your email account (Gmail)
+  //     pass: process.env.GMAIL_PASS, // Your Gmail app password
+  //   },
+  // });
+
+  // Function to send OTP email
+  static async sendOTPEmail(userEmail, otp) {
+    const msg = {
+      to: userEmail, // Recipient's email
+      from: process.env.SENDGRID_VERIFIED_EMAIL, // Your verified sender email
+      subject: "Your OTP for Verification - ANIMOEATS",
+      text: `Your 4-digit OTP is: ${otp}. If you did not request this OTP, please disregard this message.`, // Email body
+    };
+
+    try {
+      await sgMail.send(msg);
+      console.log("OTP email sent successfully to: " + userEmail);
+      console.log(`Generated OTP: ${otp}`);
+      return otp; // Return OTP for further use (to store or verify)
+    } catch (error) {
+      console.error("Error sending OTP email: ", error);
+      throw new Error("Failed to send OTP email.");
+    }
+  }
   static async createUser({ email, password, firstName, lastName }) {
-    return await prisma.user.create({
-      data: {
-        email,
-        password,
-        firstName,
-        lastName,
-        createdAt: new Date(),
-      },
+    try {
+      const user = await prisma.user.create({
+        data: {
+          email,
+          password,
+          firstName,
+          lastName,
+          verified: false,
+          createdAt: new Date(),
+        },
+      });
+      const otp = this.generateOTP();
+      const expiry = new Date(Date.now() + 15 * 60 * 1000); // OTP expires in 15 minutes
+
+      // Remove any existing OTPs for this email
+      await prisma.userAuthCode.deleteMany({ where: { email } });
+
+      await prisma.userAuthCode.create({
+        data: {
+          email,
+          code: otp.toString(),
+          expiresAt: expiry,
+        },
+      });
+
+      // Send OTP email
+      await this.sendOTPEmail(email, otp);
+
+      return {
+        userId: user.userId,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+      };
+    } catch (error) {
+      console.error("Error creating user:", error);
+      throw new Error("Error creating user.");
+    }
+  }
+
+  static async verifyOTP({ email, otp }) {
+    try {
+      // Retrieve OTP record
+      const otpRecord = await prisma.userAuthCode.findFirst({
+        where: { email },
+      });
+
+      if (!otpRecord) {
+        throw new Error("No OTP found for this email.");
+      }
+
+      if (otpRecord.code !== otp) {
+        throw new Error("Invalid OTP.");
+      }
+
+      if (new Date() > otpRecord.expiresAt) {
+        throw new Error("OTP expired. Please request a new one.");
+      }
+
+      // Mark user as verified
+      await prisma.user.update({
+        where: { email },
+        data: { verified: true },
+      });
+
+      // Delete the OTP record to prevent reuse
+      await prisma.userAuthCode.delete({ where: { email } });
+
+      return { message: "User verified successfully." };
+    } catch (error) {
+      console.error("Error verifying OTP:", error);
+      throw error;
+    }
+  }
+
+  static async generateAndSendOTP(email) {
+    const otp = this.generateOTP();
+    const expiry = new Date(Date.now() + 15 * 60 * 1000); // New 15-minute expiration
+
+    await prisma.userAuthCode.upsert({
+      where: { email },
+      update: { code: otp.toString(), expiresAt: expiry },
+      create: { email, code: otp.toString(), expiresAt: expiry },
     });
+
+    await this.sendOTPEmail(email, otp);
+
+    return otp;
   }
 
   // Update or create user profile (height, weight, etc.)
@@ -73,7 +157,7 @@ class UserGateway {
         tdee: tdee, // Update the calculated TDEE
       },
       create: {
-        userId: userId, // Creates a new record with a new `tdeeId` and specified `userId`
+        userId: userId,
         heightFeet: tdeeData.heightFeet,
         weightKg: tdeeData.weightKg,
         age: tdeeData.age,
@@ -83,58 +167,6 @@ class UserGateway {
       },
     });
   }
-
-  // Function to send 4-digit token via email
-  // static async sendTokenEmail(email) {
-  //   if (!validateEmail(email)) {
-  //     throw new Error("Invalid email domain. Only @dlsud.edu.ph is allowed.");
-  //   }
-
-  //   const token = generate4DigitToken();
-  //   const mailOptions = {
-  //     from: process.env.EMAIL_USER,
-  //     to: email,
-  //     subject: "Your 4-Digit Verification Code",
-  //     text: `Your 4-digit verification token is: ${token}`,
-  //   };
-
-  //   try {
-  //     // Send the email with the generated token
-  //     await transporter.sendMail(mailOptions);
-
-  //     // Store the token temporarily (could be saved in the database with expiration)
-  //     await prisma.token.create({
-  //       data: {
-  //         email: email,
-  //         token: token,
-  //         expiresAt: new Date(
-  //           Date.now() + parseInt(process.env.TOKEN_EXPIRATION_TIME)
-  //         ),
-  //       },
-  //     });
-
-  //     return { message: "Email sent successfully", token };
-  //   } catch (error) {
-  //     throw new Error("Failed to send verification email");
-  //   }
-  // }
-
-  // Verify the entered token
-  // static async verifyToken(email, enteredToken) {
-  //   const tokenRecord = await prisma.token.findUnique({
-  //     where: { email: email },
-  //   });
-
-  //   if (
-  // !tokenRecord ||
-  //     tokenRecord.token !== enteredToken ||
-  //     new Date() > tokenRecord.expiresAt
-  //   ) {
-  //     throw new Error("Invalid or expired token");
-  //   }
-
-  //   return true; // Token is valid
-  // }
 
   static async userHealthProfile(userId, tdeeData) {
     // Calculate TDEE using the provided data
@@ -222,6 +254,15 @@ class UserGateway {
       },
     });
   }
+  static async updateUserName(userId, nameData) {
+    return await prisma.user.update({
+      where: { userId },
+      data: {
+        firstName: nameData.firstName,
+        lastName: nameData.lastName,
+      },
+    });
+  }
 
   // Update or create user allergens
   static async createAllergies(userId, allergies) {
@@ -257,16 +298,6 @@ class UserGateway {
       },
     });
   }
-
-  // static async createUserProfile(userId, healthProfileId, allergenId) {
-  //   return await prisma.userProfile.create({
-  //     data: {
-  //       userId: userId, // Create a new user profile with the userId
-  //       healthProfileId: healthProfileId, // Associate the new TDEE ID
-  //       allergenId: allergenId, // Associate the new Allergen ID
-  //     },
-  //   });
-  // }
 }
 
 module.exports = UserGateway;

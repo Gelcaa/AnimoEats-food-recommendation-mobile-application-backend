@@ -1,21 +1,22 @@
+const functions = require("firebase-functions/v2");
+
 const express = require("express");
-const userHandler = require("../animoeats-food-recommendor/handlers/userHandler");
-const foodHandler = require("../animoeats-food-recommendor/handlers/foodHandler");
-const app = express();
-const cors = require("cors");
+const userHandler = require("./handlers/userHandler");
+const foodHandler = require("./handlers/foodHandler");
 const port = 3000;
+const app = express();
 const dotenv = require("dotenv");
-
 dotenv.config();
+const cors = require("cors");
 
-const corsOptions = {
-  origin: 'http://10.0.2.2:3000', // or your frontend URL
-  methods: ['GET', 'POST', 'PUT', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-};
-app.use(cors(corsOptions));
+const admin = require("firebase-admin");
 
-app.use(cors());
+var serviceAccount = require("./serviceAccountKey.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+app.use(cors({ origin: true }));
 app.use(express.json());
 
 // User Routes
@@ -41,10 +42,10 @@ app.post("/dev/user/register", async (req, res) => {
   }
 });
 
-app.put("/dev/user/tdee", async (req, res) => {
+app.patch("/dev/user/change-password", async (req, res) => {
   const data = req.body;
   try {
-    const response = await userHandler.updateUserProfile(data);
+    const response = await userHandler.changePassword(data);
     res.status(response.statusCode).json(JSON.parse(response.body));
   } catch (error) {
     console.error(error);
@@ -85,11 +86,10 @@ app.post("/dev/user/register/complete", async (req, res) => {
   }
 });
 
-// Food Routes
-app.post("/dev/foodCategory/create", async (req, res) => {
+app.post("/dev/user/register/complete", async (req, res) => {
   const data = req.body;
   try {
-    const response = await foodHandler.createFoodCategory(data);
+    const response = await userHandler.completeRegistration(data);
     res.status(response.statusCode).json(JSON.parse(response.body));
   } catch (error) {
     console.error(error);
@@ -97,10 +97,10 @@ app.post("/dev/foodCategory/create", async (req, res) => {
   }
 });
 
-app.get("/dev/food/:userId/available", async (req, res) => {
-  const userId = parseInt(req.params.userId);
+app.post("/dev/user/register/verify", async (req, res) => {
+  const data = req.body; // Contains email and OTP entered by the user
   try {
-    const response = await foodHandler.getAvailableFoodItems(userId);
+    const response = await userHandler.verifyRegistration(data);
     res.status(response.statusCode).json(JSON.parse(response.body));
   } catch (error) {
     console.error(error);
@@ -108,13 +108,21 @@ app.get("/dev/food/:userId/available", async (req, res) => {
   }
 });
 
-app.post("/dev/food/swipes", async (req, res) => {
-  const { userId, swipes } = req.body; // Assuming `userId` is passed in the request body
+app.post("/dev/user/register/verify", async (req, res) => {
+  const data = req.body; // Contains email and OTP entered by the user
   try {
-    const response = await foodHandler.createFoodSwipeHistories({
-      userId,
-      swipes,
-    });
+    const response = await userHandler.verifyRegistration(data);
+    res.status(response.statusCode).json(JSON.parse(response.body));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+app.post("/dev/user/register/resend-otp", async (req, res) => {
+  const { email } = req.body;
+  try {
+    const response = await userHandler.resendOTP(email);
     res.status(response.statusCode).json(JSON.parse(response.body));
   } catch (error) {
     console.error(error);
@@ -127,6 +135,42 @@ app.get("/dev/user/:userId/health-profile", async (req, res) => {
   const userId = parseInt(req.params.userId);
   try {
     const response = await userHandler.getUserHealthProfile(userId);
+    res.status(response.statusCode).json(JSON.parse(response.body));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+app.get("/dev/user/:userId/food-recommendations", async (req, res) => {
+  const userId = parseInt(req.params.userId);
+  try {
+    const response = await userHandler.getUserFoodRecommendations(userId);
+    res.status(response.statusCode).json(JSON.parse(response.body));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+app.post("/dev/user/food-choices", async (req, res) => {
+  const data = req.body; // Contains userId, foodItemId, preference, and categoryId
+  try {
+    const response = await foodHandler.createFoodChoice(data);
+    res.status(response.statusCode).json(JSON.parse(response.body));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
+
+app.get("/dev/user/food-choices/:userId", async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const response = await foodHandler.getFoodChoicesByDay(
+      Number(userId),
+    );
     res.status(response.statusCode).json(JSON.parse(response.body));
   } catch (error) {
     console.error(error);
@@ -156,13 +200,42 @@ app.get("/dev/user/:userId/details", async (req, res) => {
   }
 });
 
-app.use((req, res, next) => {
-  return res.status(404).json({
-    error: "Not Found",
-  });
+app.get("/dev/food/:userId/available", async (req, res) => {
+  const userId = parseInt(req.params.userId);
+  try {
+    const response = await foodHandler.getAvailableFoodItems(userId);
+    res.status(response.statusCode).json(JSON.parse(response.body));
+  } catch (error) {
+    console.error("Error details:", error); // Logs detailed error information to the console for debugging
+
+    // Send detailed error in the response
+    const errorResponse = {
+      message: "Internal Server Error",
+      error: error.message || "Unknown error",
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined, // Include stack trace only in development
+    };
+
+    res.status(500).json(errorResponse);
+  }
+});
+
+app.post("/dev/food/swipes", async (req, res) => {
+  const { userId, swipes } = req.body; // Assuming `userId` is passed in the request body
+  try {
+    const response = await foodHandler.createFoodSwipeHistories({
+      userId,
+      swipes,
+    });
+    res.status(response.statusCode).json(JSON.parse(response.body));
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
 });
 
 // Start the server
-app.listen(port, "0.0.0.0", () => {
+app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
+
+exports.app = functions.https.onRequest(app);

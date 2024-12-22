@@ -1,0 +1,285 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["app_user", "food", "public"]
+}
+
+// prisma/schema.prisma
+
+model User {
+  userId    Int      @id @default(autoincrement()) @map("user_id")
+  email     String   @unique
+  password  String
+  firstName String   @map("first_name")
+  lastName  String   @map("last_name")
+  verified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  UserHealthProfile       UserHealthProfile[]
+  UserAllergies           UserAllergies[]
+  FoodSwipeHistory        FoodSwipeHistory[]
+  UserCategoryRating      UserCategoryRating[]
+  UserAuthCode            UserAuthCode[]
+  UserFoodRecommendations UserFoodRecommendations[]
+  UserFoodChoice          UserFoodChoice[]
+
+  @@map("user")
+  @@schema("app_user")
+}
+
+model UserHealthProfile {
+  healthProfileId Int      @id @default(autoincrement()) @map("health_profile_id")
+  userId          Int      @unique @map("user_id")
+  weightKg        Float    @map("weight_kg")
+  heightFeet      Float    @map("height_feet")
+  age             Int
+  gender          String
+  activityLevel   String
+  bmi             Float // New field to store calculated BMI
+  weightGoal      String // New field to indicate weight goal ("gain", "maintain", "lose")
+  calories        Float // New field for adjusted calorie intake
+  carbohydrate    Float
+  fat             Float
+  protein         Float
+  fiber           Float
+  sodium          Float
+  sugar           Float
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [userId])
+
+  // userProfile     UserProfile?  // Nullable relationship for optional user profile data
+
+  @@map("user_health_profile")
+  @@schema("app_user")
+}
+
+model UserAllergies {
+  allergenId     Int @id @default(autoincrement()) @map("allergen_id")
+  userId         Int @unique @map("user_id")
+  egg_free       Int @default(0)
+  gluten_free    Int @default(0)
+  dairy_free     Int @default(0)
+  fish_free      Int @default(0)
+  shellfish_free Int @default(0)
+  peanut_free    Int @default(0)
+  treenut_free   Int @default(0)
+  soy_free       Int @default(0)
+  wheat_free     Int @default(0)
+
+  user User @relation(fields: [userId], references: [userId])
+
+  @@map("user_allergies")
+  @@schema("app_user")
+}
+
+model UserCategoryRating {
+  userId     Int
+  categoryId Int
+  rating     Float
+  rank       Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User         @relation(fields: [userId], references: [userId])
+  category FoodCategory @relation(fields: [categoryId], references: [id])
+
+  @@id([userId, categoryId]) // Composite key to ensure unique user-category pairs
+  @@map("user_category_rating")
+  @@schema("app_user")
+}
+
+model FoodSwipeHistory {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  foodItemId Int
+  categoryId Int
+  preference String
+  swipeDate  DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User         @relation(fields: [userId], references: [userId])
+  foodItem FoodItem     @relation(fields: [foodItemId], references: [id])
+  category FoodCategory @relation(fields: [categoryId], references: [id])
+
+  @@map("food_swipe_history")
+  @@schema("app_user")
+}
+
+model UserFoodRecommendations {
+  id            Int      @id @default(autoincrement()) @map("user_food_recommendation_id")
+  userId        Int      @map("user_id")
+  foodDetailId  Int      @map("food_detail_id")
+  recommendedAt DateTime @default(now()) @map("recommended_at")
+  rank          Int
+
+  user       User        @relation(fields: [userId], references: [userId])
+  foodDetail FoodDetails @relation(fields: [foodDetailId], references: [id])
+
+  @@map("user_food_recommendations")
+  @@schema("app_user")
+}
+
+model UserAuthCode {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  code      String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [email], references: [email])
+
+  @@map("user_auth_code")
+  @@schema("app_user")
+}
+
+// Food-related models in 'food' schema
+
+model FoodCategory {
+  id                 Int                  @id @default(autoincrement())
+  name               String               @unique
+  FoodItem           FoodItem[]           @relation("FoodCategoryFoodItem")
+  FoodSwipeHistory   FoodSwipeHistory[]
+  UserCategoryRating UserCategoryRating[]
+  FoodDetails        FoodDetails[]        @relation("FoodCategoryFoodDetails")
+  UserFoodChoice     UserFoodChoice[]
+
+  @@map("food_category")
+  @@schema("food")
+}
+
+// model FoodItem {
+//   id         Int          @id @default(autoincrement())
+//   name       String
+//   categoryId Int
+//   url        String // URL field for the food item (e.g., image URL)
+//   createdAt  DateTime     @default(now())
+//   updatedAt  DateTime     @updatedAt
+//   category   FoodCategory @relation("FoodCategoryFoodItem", fields: [categoryId], references: [id])
+
+//   FoodSwipeHistory FoodSwipeHistory[]
+//   UserFoodChoice   UserFoodChoice[]
+
+//   @@map("food_item")
+//   @@schema("food")
+// }
+
+model FoodDetails {
+  id                      Int                       @id @default(autoincrement())
+  categoryId              Int
+  imageUrl                String?
+  foodName                String
+  stallName               String
+  price                   Float
+  calories                Float
+  protein                 Float
+  carbohydrates           Float
+  fat                     Float
+  fiber                   Float
+  sugar                   Float
+  sodium                  Float
+  eggFree                 Boolean                   @default(false)
+  glutenFree              Boolean                   @default(false)
+  dairyFree               Boolean                   @default(false)
+  fishFree                Boolean                   @default(false)
+  shellfishFree           Boolean                   @default(false)
+  peanutFree              Boolean                   @default(false)
+  treenutFree             Boolean                   @default(false)
+  soyFree                 Boolean                   @default(false)
+  wheatFree               Boolean                   @default(false)
+  categorySalad           Int
+  categoryAppetizers      Int
+  categoryBeef            Int
+  categoryBreakfast       Int
+  categoryChicken         Int
+  categoryMixed           Int
+  categoryNoodle          Int
+  categoryPasta           Int
+  categoryPizza           Int
+  categoryPork            Int
+  categorySandwiches      Int
+  categorySeafood         Int
+  categorySidedish        Int
+  categoryVegetable       Int
+  category                FoodCategory              @relation("FoodCategoryFoodDetails", fields: [categoryId], references: [id]) // Required relation
+  UserFoodRecommendations UserFoodRecommendations[]
+
+  @@map("food_details")
+  @@schema("food")
+}
+
+model UserFoodChoice {
+  id         Int          @id @default(autoincrement())
+  userId     Int
+  foodItemId Int
+  choiceDate DateTime     @default(now())
+  categoryId Int
+  user       User         @relation(fields: [userId], references: [userId])
+  foodItem   FoodItem     @relation(fields: [foodItemId], references: [id])
+  category   FoodCategory @relation(fields: [categoryId], references: [id])
+
+  @@map("user_food_choice")
+  @@schema("app_user")
+}
+
+model FoodItem {
+  id                 Int                @id @default(autoincrement())
+  categoryId         Int
+  url                String
+  name               String
+  stallName          String
+  price              Float
+  calories           Float
+  protein            Float
+  carbohydrates      Float
+  fat                Float
+  fiber              Float
+  sugar              Float
+  sodium             Float
+  eggFree            Boolean            @default(false)
+  glutenFree         Boolean            @default(false)
+  dairyFree          Boolean            @default(false)
+  fishFree           Boolean            @default(false)
+  shellfishFree      Boolean            @default(false)
+  peanutFree         Boolean            @default(false)
+  treenutFree        Boolean            @default(false)
+  soyFree            Boolean            @default(false)
+  wheatFree          Boolean            @default(false)
+  categorySalad      Int
+  categoryAppetizers Int
+  categoryBeef       Int
+  categoryBreakfast  Int
+  categoryChicken    Int
+  categoryMixed      Int
+  categoryNoodle     Int
+  categoryPasta      Int
+  categoryPizza      Int
+  categoryPork       Int
+  categorySandwiches Int
+  categorySeafood    Int
+  categorySidedish   Int
+  categoryVegetable  Int
+  category           FoodCategory       @relation("FoodCategoryFoodItem", fields: [categoryId], references: [id]) // Required relation
+  FoodSwipeHistory   FoodSwipeHistory[]
+  UserFoodChoice     UserFoodChoice[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @default(now())
+
+  @@map("food_item")
+  @@schema("food")
+}

@@ -27,8 +27,9 @@ async function loginUser(data) {
     const user = await prisma.user.findUnique({
       where: { email: data.email },
       include: {
-        UserHealthProfile: true, // Include UserHealthProfile for the user
+        UserHealthProfile: true,
         UserAllergies: true,
+        FoodSwipeHistory: true,
       },
     });
 
@@ -53,26 +54,70 @@ async function loginUser(data) {
     }
 
     // Check if the user has a health profile
+    // Check if the user has a health profile
     const userHealthProfile = user.UserHealthProfile[0];
-    if (userHealthProfile) {
+    if (!userHealthProfile) {
       return {
         statusCode: 200,
         body: JSON.stringify({
-          message: "Login successful! You are fully registered.",
+          message:
+            "Login successful, but please complete your health profile first.",
           userId: user.userId,
-          requiresRegisterCompletion: false,
-        }),
-      };
-    } else {
-      return {
-        statusCode: 200,
-        body: JSON.stringify({
-          message: "Login successful, but please complete your information.",
-          userId: user.userId,
-          requiresCompletion: true, // Indicate that registration is incomplete
+          verify: user.verified,
+          requiresCompletion: true,
         }),
       };
     }
+
+    // Check if the user has FoodSwipeHistory
+    const foodSwipeHistory = user.FoodSwipeHistory;
+
+    const today = new Date();
+    const todayStart = new Date(today.setHours(0, 0, 0, 0)); // Set to the start of today
+    const todayEnd = new Date(today.setHours(23, 59, 59, 999)); // Set to the end of today
+
+    // Check if any food swipe is from today
+    const swipedToday = foodSwipeHistory.some((swipe) => {
+      const swipeDate = new Date(swipe.swipeDate);
+      return swipeDate >= todayStart && swipeDate <= todayEnd;
+    });
+
+    if (!foodSwipeHistory || foodSwipeHistory.length === 0) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          message:
+            "Login successful, but please proceed to swipe food items first.",
+          userId: user.userId,
+          verify: user.verified,
+          requiresSwipeCompletion: true,
+        }),
+      };
+    }
+
+    if (!swipedToday) {
+      return {
+        statusCode: 200,
+        body: JSON.stringify({
+          message: "Login successful, but please swipe food items today.",
+          userId: user.userId,
+          verify: user.verified,
+          requiresSwipeCompletion: true,
+        }),
+      };
+    }
+
+    // If all checks pass
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        message: "Login successful",
+        userId: user.userId,
+        verify: user.verified,
+        requiresRegisterCompletion: false,
+        requiresSwipeCompletion: false,
+      }),
+    };
   } catch (error) {
     console.error("Login error:", error);
     return {
@@ -112,6 +157,7 @@ async function registerUser(data) {
 
     const userData = { ...data, password: hashedPassword };
     const user = await UserGateway.createUser(userData);
+    console.log(user);
     return {
       statusCode: 201,
       body: JSON.stringify(transformUser(user)),
@@ -120,6 +166,103 @@ async function registerUser(data) {
     return {
       statusCode: 500,
       body: JSON.stringify({ error: error.message }),
+    };
+  }
+}
+
+async function verifyRegistration(data) {
+  const { email, otp } = data; // Destructure email and otp from request data
+
+  try {
+    // Call the verifyOTP method in your gateway
+    const result = await UserGateway.verifyOTP({ email, otp });
+
+    // Format the success response
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: result.message }),
+    };
+  } catch (error) {
+    console.error("Error in verifyRegistration:", error);
+
+    // Format the error response
+    return {
+      statusCode: 400,
+      body: JSON.stringify({
+        message: error.message || "Failed to verify OTP",
+      }),
+    };
+  }
+}
+
+// Change Password Handler
+async function changePassword(data) {
+  const { userId, oldPassword, newPassword } = data; // Destructure the necessary fields from data
+  try {
+    // Fetch the user from the database
+    const user = await prisma.user.findUnique({
+      where: { userId: userId },
+    });
+
+    if (!user) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({ error: "User not found" }),
+      };
+    }
+
+    // Verify the old password with the stored hashed password
+    const isPasswordValid = await verifyPassword(oldPassword, user.password);
+
+    if (!isPasswordValid) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: "Old password is incorrect" }),
+      };
+    }
+
+    // Hash the new password before updating
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update the user's password in the database
+    const updatedUser = await prisma.user.update({
+      where: { userId: userId },
+      data: { password: hashedNewPassword },
+    });
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: "Password changed successfully" }),
+    };
+  } catch (error) {
+    console.error("Error changing password:", error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Internal Server Error" }),
+    };
+  }
+}
+
+async function verifyPassword(enteredPassword, storedHashedPassword) {
+  return await bcrypt.compare(enteredPassword, storedHashedPassword);
+}
+
+module.exports = { changePassword };
+
+async function resendOTP(email) {
+  try {
+    const otp = await UserGateway.generateAndSendOTP(email);
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        message: "A new OTP has been sent to your email.",
+      }),
+    };
+  } catch (error) {
+    console.error("Error in resendOTP:", error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ error: "Failed to resend OTP." }),
     };
   }
 }
@@ -168,6 +311,11 @@ async function updateUserHealthProfile(data) {
       data.user.id,
       updateUserHealthProfileData
     );
+
+    const updatedUserNames = await UserGateway.updateUserName(data.user.id, {
+      firstName: data.firstName,
+      lastName: data.lastName,
+    });
 
     return {
       statusCode: 200,
@@ -222,11 +370,6 @@ async function completeRegistration(data) {
       allergiesData
     );
 
-    // await UserGateway.createUserProfile(
-    //   data.user.id,
-    //   userHealthProfile.healthProfileId,
-    //   userAllergies.allergenId
-    // );
     return {
       statusCode: 201,
       body: JSON.stringify({
@@ -244,8 +387,73 @@ async function completeRegistration(data) {
     };
   }
 }
+
+async function getUserFoodRecommendations(userId) {
+  try {
+    // Fetching the 6 latest food recommendations for the user
+    const foodRecommendations = await prisma.userFoodRecommendations.findMany({
+      where: {
+        userId: userId,
+      },
+      orderBy: [
+        { recommendedAt: "desc" }, // First order by the latest recommendation
+        { rank: "asc" }, // Then order by rank (1 - 6)
+      ],
+      take: 20, // Limiting to the 6 latest recommendations
+      include: {
+        foodDetail: true, // Including the food details associated with the recommendation
+      },
+    });
+
+    if (!foodRecommendations || foodRecommendations.length === 0) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          message: "No food recommendations found for this user",
+        }),
+      };
+    }
+
+    // Mapping the response to include only necessary fields
+    const foodData = foodRecommendations.map((recommendation) => ({
+      rank: recommendation.rank,
+      foodId: recommendation.foodDetail.id,
+      categoryId: recommendation.foodDetail.categoryId,
+      foodName: recommendation.foodDetail.foodName,
+      imageUrl: recommendation.foodDetail.imageUrl,
+      stallName: recommendation.foodDetail.stallName,
+      price: recommendation.foodDetail.price,
+      calories: recommendation.foodDetail.calories,
+      protein: recommendation.foodDetail.protein,
+      carbohydrates: recommendation.foodDetail.carbohydrates,
+      fat: recommendation.foodDetail.fat,
+      fiber: recommendation.foodDetail.fiber,
+      sodium: recommendation.foodDetail.sodium,
+    }));
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({
+        foodRecommendations: foodData,
+      }),
+    };
+  } catch (error) {
+    console.error(error);
+    return {
+      statusCode: 500,
+      body: JSON.stringify({ message: "Internal Server Error" }),
+    };
+  }
+}
+
 async function getUserHealthProfile(userId) {
   try {
+    const user = await prisma.user.findUnique({
+      where: {
+        userId: userId,
+      },
+    });
+
     const userHealthProfile = await prisma.userHealthProfile.findUnique({
       where: {
         userId: userId,
@@ -277,6 +485,9 @@ async function getUserHealthProfile(userId) {
     return {
       statusCode: 200,
       body: JSON.stringify({
+        user: {
+          firstName: user.firstName,
+        },
         userHealthProfile: {
           healthProfileId: userHealthProfile.healthProfileId,
           userId: userHealthProfile.userId,
@@ -347,6 +558,7 @@ async function getUserDetails(userId) {
         userId: true,
         firstName: true,
         lastName: true,
+        email: true,
         UserHealthProfile: {
           select: {
             weightKg: true,
@@ -371,7 +583,7 @@ async function getUserDetails(userId) {
     }
 
     // Extract health profile details
-    const { firstName, lastName } = userDetails;
+    const { firstName, lastName, email } = userDetails;
     const { weightKg, heightFeet, age, activityLevel } =
       userDetails.UserHealthProfile[0];
 
@@ -381,6 +593,7 @@ async function getUserDetails(userId) {
       body: JSON.stringify({
         firstName: firstName,
         lastName: lastName,
+        email: email,
         heightFeet: heightFeet,
         weightKg: weightKg,
         age: age,
@@ -399,11 +612,15 @@ async function getUserDetails(userId) {
 module.exports = {
   loginUser,
   registerUser,
+  changePassword,
   updateAllergies,
   updateUserHealthProfile,
   updateAllergies,
+  verifyRegistration,
+  resendOTP,
   completeRegistration,
   getUserHealthProfile,
+  getUserFoodRecommendations,
   getUserAllergies,
   getUserDetails,
 };

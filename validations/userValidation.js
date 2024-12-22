@@ -7,13 +7,8 @@ function validateLogin(data) {
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const validDomain = "@dlsud.edu.ph";
   if (data.email && !emailRegex.test(data.email)) {
     errors.push("Invalid email format");
-  }
-
-  if (!data.email.endsWith(validDomain)) {
-    errors.push(`Email must belong to the ${validDomain} domain`);
   }
 
   return { isValid: errors.length === 0, errors };
@@ -30,14 +25,10 @@ function validateRegister(data) {
 
   // Validate email format
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const validDomain = "@dlsud.edu.ph";
   if (data.email && !emailRegex.test(data.email)) {
     errors.push("Invalid email format");
   }
   
-  if (!data.email.endsWith(validDomain)) {
-    errors.push(`Email must belong to the ${validDomain} domain`);
-  }
 
   // Validate password length
   if (data.password && data.password.length < 8) {
